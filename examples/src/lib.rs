@@ -229,6 +229,9 @@ impl ExampleBase {
                     .unwrap()
                     .to_vec();
             extension_names.push(DebugUtils::NAME.as_ptr());
+            extension_names.push(ash::vk::KhrExternalMemoryCapabilitiesFn::NAME.as_ptr());
+            extension_names.push(ash::vk::KhrGetPhysicalDeviceProperties2Fn::NAME.as_ptr());
+            // extension_names.push(ash::vk::ExtExternalMemoryDmaBufFn::NAME.as_ptr());
 
             #[cfg(any(target_os = "macos", target_os = "ios"))]
             {
@@ -314,11 +317,66 @@ impl ExampleBase {
                         })
                 })
                 .expect("Couldn't find suitable device.");
+
+            let mut props = [vk::DrmFormatModifierProperties2EXT::default(); 16];
+            let mut modifier_format_properties =
+                ash::vk::DrmFormatModifierPropertiesList2EXT::default()
+                    .drm_format_modifier_properties(&mut props);
+            let mut format_properties =
+                vk::FormatProperties2::default().push_next(&mut modifier_format_properties);
+            instance.get_physical_device_format_properties2(
+                pdevice,
+                vk::Format::B8G8R8A8_SRGB,
+                &mut format_properties,
+            );
+            println!("{format_properties:?}");
+            println!("{modifier_format_properties:?}");
+            let len = modifier_format_properties.drm_format_modifier_count as usize;
+            println!("{:?}", &props[..len]);
+            let mut modifier_format_info =
+                ash::vk::PhysicalDeviceImageDrmFormatModifierInfoEXT::default()
+                    .drm_format_modifier(0)
+                    .sharing_mode(vk::SharingMode::EXCLUSIVE)
+                    .queue_family_indices(&[]); // XXX?
+            let mut external_format_info =
+                ash::vk::PhysicalDeviceExternalImageFormatInfo::default()
+                    .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+            let format_info = vk::PhysicalDeviceImageFormatInfo2::default()
+                //.format(vk::Format::R8G8B8A8_UNORM)
+                //.format(vk::Format::B8G8R8A8_UNORM)
+                //.format(vk::Format::B8G8R8A8_SRGB)
+                .format(vk::Format::B8G8R8A8_SRGB)
+                .ty(vk::ImageType::TYPE_2D)
+                //.tiling(vk::ImageTiling::LINEAR)
+                .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
+                .usage(vk::ImageUsageFlags::SAMPLED)
+                //.usage(vk::ImageUsageFlags::TRANSFER_SRC)
+                .flags(vk::ImageCreateFlags::empty())
+                .push_next(&mut external_format_info)
+                .push_next(&mut modifier_format_info);
+            let mut format_prop = vk::ImageFormatProperties2::default();
+            instance
+                .get_physical_device_image_format_properties2(
+                    pdevice,
+                    &format_info,
+                    &mut format_prop,
+                )
+                .unwrap();
+            println!("format_prop: {format_prop:?}");
+
             let queue_family_index = queue_family_index as u32;
             let device_extension_names_raw = [
                 Swapchain::NAME.as_ptr(),
                 #[cfg(any(target_os = "macos", target_os = "ios"))]
                 KhrPortabilitySubsetFn::NAME.as_ptr(),
+                vk::KhrExternalMemoryFn::NAME.as_ptr(),
+                vk::ExtImageDrmFormatModifierFn::NAME.as_ptr(),
+                vk::KhrBindMemory2Fn::NAME.as_ptr(),
+                vk::KhrSamplerYcbcrConversionFn::NAME.as_ptr(),
+                vk::KhrImageFormatListFn::NAME.as_ptr(),
+                vk::KhrMaintenance1Fn::NAME.as_ptr(),
+                vk::KhrGetMemoryRequirements2Fn::NAME.as_ptr(),
+                ash::extensions::khr::ExternalMemoryFd::NAME.as_ptr(),
             ];
             let features = vk::PhysicalDeviceFeatures {
                 shader_clip_distance: 1,
@@ -439,6 +497,7 @@ impl ExampleBase {
                 })
                 .collect();
             let device_memory_properties = instance.get_physical_device_memory_properties(pdevice);
+            println!("device_memory_properties: {device_memory_properties:?}");
             let depth_image_create_info = vk::ImageCreateInfo::default()
                 .image_type(vk::ImageType::TYPE_2D)
                 .format(vk::Format::D16_UNORM)

@@ -2,6 +2,7 @@ use std::default::Default;
 use std::ffi::CStr;
 use std::io::Cursor;
 use std::mem::{self, align_of};
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::os::raw::c_void;
 
 use ash::util::*;
@@ -261,162 +262,21 @@ fn main() {
             .bind_buffer_memory(uniform_color_buffer, uniform_color_buffer_memory, 0)
             .unwrap();
 
-        let image = image::load_from_memory(include_bytes!("../../assets/rust.png"))
-            .unwrap()
-            .to_rgba8();
-        let (width, height) = image.dimensions();
-        let image_extent = vk::Extent2D { width, height };
-        let image_data = image.into_raw();
-        let image_buffer_info = vk::BufferCreateInfo {
-            size: (std::mem::size_of::<u8>() * image_data.len()) as u64,
-            usage: vk::BufferUsageFlags::TRANSFER_SRC,
-            sharing_mode: vk::SharingMode::EXCLUSIVE,
-            ..Default::default()
-        };
-        let image_buffer = base.device.create_buffer(&image_buffer_info, None).unwrap();
-        let image_buffer_memory_req = base.device.get_buffer_memory_requirements(image_buffer);
-        let image_buffer_memory_index = find_memorytype_index(
-            &image_buffer_memory_req,
+        /*
+        let texture_image = load_image(
+            &base.device,
             &base.device_memory_properties,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )
-        .expect("Unable to find suitable memorytype for the image buffer.");
-
-        let image_buffer_allocate_info = vk::MemoryAllocateInfo {
-            allocation_size: image_buffer_memory_req.size,
-            memory_type_index: image_buffer_memory_index,
-            ..Default::default()
-        };
-        let image_buffer_memory = base
-            .device
-            .allocate_memory(&image_buffer_allocate_info, None)
-            .unwrap();
-        let image_ptr = base
-            .device
-            .map_memory(
-                image_buffer_memory,
-                0,
-                image_buffer_memory_req.size,
-                vk::MemoryMapFlags::empty(),
-            )
-            .unwrap();
-        let mut image_slice = Align::new(
-            image_ptr,
-            std::mem::align_of::<u8>() as u64,
-            image_buffer_memory_req.size,
+            base.setup_command_buffer,
+            base.setup_commands_reuse_fence,
+            base.present_queue,
         );
-        image_slice.copy_from_slice(&image_data);
-        base.device.unmap_memory(image_buffer_memory);
-        base.device
-            .bind_buffer_memory(image_buffer, image_buffer_memory, 0)
-            .unwrap();
-
-        let texture_create_info = vk::ImageCreateInfo {
-            image_type: vk::ImageType::TYPE_2D,
-            format: vk::Format::R8G8B8A8_UNORM,
-            extent: image_extent.into(),
-            mip_levels: 1,
-            array_layers: 1,
-            samples: vk::SampleCountFlags::TYPE_1,
-            tiling: vk::ImageTiling::OPTIMAL,
-            usage: vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
-            sharing_mode: vk::SharingMode::EXCLUSIVE,
-            ..Default::default()
-        };
-        let texture_image = base
-            .device
-            .create_image(&texture_create_info, None)
-            .unwrap();
-        let texture_memory_req = base.device.get_image_memory_requirements(texture_image);
-        let texture_memory_index = find_memorytype_index(
-            &texture_memory_req,
-            &base.device_memory_properties,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        )
-        .expect("Unable to find suitable memory index for depth image.");
-
-        let texture_allocate_info = vk::MemoryAllocateInfo {
-            allocation_size: texture_memory_req.size,
-            memory_type_index: texture_memory_index,
-            ..Default::default()
-        };
-        let texture_memory = base
-            .device
-            .allocate_memory(&texture_allocate_info, None)
-            .unwrap();
-        base.device
-            .bind_image_memory(texture_image, texture_memory, 0)
-            .expect("Unable to bind depth image memory");
-
-        record_submit_commandbuffer(
+        */
+        let texture_image = load_image_dmabuf(
+            &base.instance,
             &base.device,
             base.setup_command_buffer,
             base.setup_commands_reuse_fence,
             base.present_queue,
-            &[],
-            &[],
-            &[],
-            |device, texture_command_buffer| {
-                let texture_barrier = vk::ImageMemoryBarrier {
-                    dst_access_mask: vk::AccessFlags::TRANSFER_WRITE,
-                    new_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    image: texture_image,
-                    subresource_range: vk::ImageSubresourceRange {
-                        aspect_mask: vk::ImageAspectFlags::COLOR,
-                        level_count: 1,
-                        layer_count: 1,
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                };
-                device.cmd_pipeline_barrier(
-                    texture_command_buffer,
-                    vk::PipelineStageFlags::BOTTOM_OF_PIPE,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    &[texture_barrier],
-                );
-                let buffer_copy_regions = vk::BufferImageCopy::default()
-                    .image_subresource(
-                        vk::ImageSubresourceLayers::default()
-                            .aspect_mask(vk::ImageAspectFlags::COLOR)
-                            .layer_count(1),
-                    )
-                    .image_extent(image_extent.into());
-
-                device.cmd_copy_buffer_to_image(
-                    texture_command_buffer,
-                    image_buffer,
-                    texture_image,
-                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    &[buffer_copy_regions],
-                );
-                let texture_barrier_end = vk::ImageMemoryBarrier {
-                    src_access_mask: vk::AccessFlags::TRANSFER_WRITE,
-                    dst_access_mask: vk::AccessFlags::SHADER_READ,
-                    old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                    image: texture_image,
-                    subresource_range: vk::ImageSubresourceRange {
-                        aspect_mask: vk::ImageAspectFlags::COLOR,
-                        level_count: 1,
-                        layer_count: 1,
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                };
-                device.cmd_pipeline_barrier(
-                    texture_command_buffer,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::PipelineStageFlags::FRAGMENT_SHADER,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    &[texture_barrier_end],
-                );
-            },
         );
 
         let sampler_info = vk::SamplerCreateInfo {
@@ -436,7 +296,7 @@ fn main() {
 
         let tex_image_view_info = vk::ImageViewCreateInfo {
             view_type: vk::ImageViewType::TYPE_2D,
-            format: texture_create_info.format,
+            format: vk::Format::R8G8B8A8_UNORM, // XXX
             components: vk::ComponentMapping {
                 r: vk::ComponentSwizzle::R,
                 g: vk::ComponentSwizzle::G,
@@ -792,11 +652,11 @@ fn main() {
             .destroy_shader_module(vertex_shader_module, None);
         base.device
             .destroy_shader_module(fragment_shader_module, None);
-        base.device.free_memory(image_buffer_memory, None);
-        base.device.destroy_buffer(image_buffer, None);
-        base.device.free_memory(texture_memory, None);
+        //base.device.free_memory(image_buffer_memory, None);
+        //base.device.destroy_buffer(image_buffer, None);
+        //base.device.free_memory(texture_memory, None);
         base.device.destroy_image_view(tex_image_view, None);
-        base.device.destroy_image(texture_image, None);
+        //base.device.destroy_image(texture_image, None);
         base.device.free_memory(index_buffer_memory, None);
         base.device.destroy_buffer(index_buffer, None);
         base.device.free_memory(uniform_color_buffer_memory, None);
@@ -814,4 +674,376 @@ fn main() {
         }
         base.device.destroy_render_pass(renderpass, None);
     }
+}
+
+fn image() -> (vk::Extent2D, Vec<u8>) {
+    let image = image::load_from_memory(include_bytes!("../../assets/rust.png"))
+        .unwrap()
+        .to_rgba8();
+    let (width, height) = image.dimensions();
+    let image_extent = vk::Extent2D { width, height };
+    (image_extent, image.into_raw())
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct udmabuf_create {
+    pub memfd: u32,
+    pub flags: u32,
+    pub offset: u64,
+    pub size: u64,
+}
+
+fn create_udmabuf(extents: vk::Extent2D, data: &[u8], stride: u64) -> OwnedFd {
+    const UDMABUF_FLAGS_CLOEXEC: u32 = 0x01;
+
+    let page_size = rustix::param::page_size();
+    let mut size = data.len();
+    while size % page_size != 0 {
+        size += 1;
+    }
+
+    let dev = std::fs::File::options()
+        .read(true)
+        .write(true)
+        .open("/dev/udmabuf")
+        .unwrap();
+    let memfd = rustix::fs::memfd_create(
+        "udmabuf",
+        rustix::fs::MemfdFlags::CLOEXEC | rustix::fs::MemfdFlags::ALLOW_SEALING,
+    )
+    .unwrap();
+    let stride_pad = stride - extents.width as u64 * 4;
+    for i in 0..extents.height {
+        let start = (i * extents.width * 4) as usize;
+        let slice = &data[start..start + extents.width as usize * 4];
+        assert_eq!(rustix::io::write(&memfd, slice).unwrap(), slice.len());
+        rustix::fs::seek(&memfd, rustix::fs::SeekFrom::Current(stride_pad as _)).unwrap();
+    }
+    assert_eq!(rustix::io::write(&memfd, &data).unwrap(), data.len());
+    rustix::fs::fcntl_add_seals(&memfd, rustix::fs::SealFlags::SHRINK).unwrap();
+    let fd = unsafe {
+        libc::ioctl(
+            dev.as_raw_fd(),
+            linux_raw_sys::ioctl::UDMABUF_CREATE.into(),
+            &udmabuf_create {
+                memfd: memfd.as_raw_fd() as u32,
+                flags: UDMABUF_FLAGS_CLOEXEC,
+                offset: 0,
+                size: size as u64,
+            },
+        )
+    };
+    assert!(fd != -1);
+    unsafe { OwnedFd::from_raw_fd(fd) }
+}
+
+// XXX unallocate? lifetimes?
+unsafe fn load_image(
+    device: &ash::Device,
+    device_memory_properties: &vk::PhysicalDeviceMemoryProperties,
+    command_buffer: vk::CommandBuffer,
+    command_buffer_reuse_fence: vk::Fence,
+    queue: vk::Queue,
+) -> vk::Image {
+    let (image_extent, image_data) = image();
+    let image_buffer_info = vk::BufferCreateInfo {
+        size: (std::mem::size_of::<u8>() * image_data.len()) as u64,
+        usage: vk::BufferUsageFlags::TRANSFER_SRC,
+        sharing_mode: vk::SharingMode::EXCLUSIVE,
+        ..Default::default()
+    };
+    let image_buffer = device.create_buffer(&image_buffer_info, None).unwrap();
+    let image_buffer_memory_req = device.get_buffer_memory_requirements(image_buffer);
+    let image_buffer_memory_index = find_memorytype_index(
+        &image_buffer_memory_req,
+        device_memory_properties,
+        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+    )
+    .expect("Unable to find suitable memorytype for the image buffer.");
+
+    let image_buffer_allocate_info = vk::MemoryAllocateInfo {
+        allocation_size: image_buffer_memory_req.size,
+        memory_type_index: image_buffer_memory_index,
+        ..Default::default()
+    };
+    let image_buffer_memory = device
+        .allocate_memory(&image_buffer_allocate_info, None)
+        .unwrap();
+    let image_ptr = device
+        .map_memory(
+            image_buffer_memory,
+            0,
+            image_buffer_memory_req.size,
+            vk::MemoryMapFlags::empty(),
+        )
+        .unwrap();
+    let mut image_slice = Align::new(
+        image_ptr,
+        std::mem::align_of::<u8>() as u64,
+        image_buffer_memory_req.size,
+    );
+    image_slice.copy_from_slice(&image_data);
+    device.unmap_memory(image_buffer_memory);
+    device
+        .bind_buffer_memory(image_buffer, image_buffer_memory, 0)
+        .unwrap();
+
+    let texture_create_info = vk::ImageCreateInfo {
+        image_type: vk::ImageType::TYPE_2D,
+        format: vk::Format::R8G8B8A8_UNORM,
+        extent: image_extent.into(),
+        mip_levels: 1,
+        array_layers: 1,
+        samples: vk::SampleCountFlags::TYPE_1,
+        tiling: vk::ImageTiling::OPTIMAL,
+        usage: vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
+        sharing_mode: vk::SharingMode::EXCLUSIVE,
+        ..Default::default()
+    };
+    let texture_image = device.create_image(&texture_create_info, None).unwrap();
+    let texture_memory_req = device.get_image_memory_requirements(texture_image);
+    let texture_memory_index = find_memorytype_index(
+        &texture_memory_req,
+        device_memory_properties,
+        vk::MemoryPropertyFlags::DEVICE_LOCAL,
+    )
+    .expect("Unable to find suitable memory index for depth image.");
+
+    let texture_allocate_info = vk::MemoryAllocateInfo {
+        allocation_size: texture_memory_req.size,
+        memory_type_index: texture_memory_index,
+        ..Default::default()
+    };
+    let texture_memory = device
+        .allocate_memory(&texture_allocate_info, None)
+        .unwrap();
+    device
+        .bind_image_memory(texture_image, texture_memory, 0)
+        .expect("Unable to bind depth image memory");
+
+    record_submit_commandbuffer(
+        &device,
+        command_buffer,
+        command_buffer_reuse_fence,
+        queue,
+        &[],
+        &[],
+        &[],
+        |device, texture_command_buffer| {
+            let texture_barrier = vk::ImageMemoryBarrier {
+                dst_access_mask: vk::AccessFlags::TRANSFER_WRITE,
+                new_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                image: texture_image,
+                subresource_range: vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    level_count: 1,
+                    layer_count: 1,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            device.cmd_pipeline_barrier(
+                texture_command_buffer,
+                vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[texture_barrier],
+            );
+            let buffer_copy_regions = vk::BufferImageCopy::default()
+                .image_subresource(
+                    vk::ImageSubresourceLayers::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .layer_count(1),
+                )
+                .image_extent(image_extent.into());
+
+            device.cmd_copy_buffer_to_image(
+                texture_command_buffer,
+                image_buffer,
+                texture_image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &[buffer_copy_regions],
+            );
+            let texture_barrier_end = vk::ImageMemoryBarrier {
+                src_access_mask: vk::AccessFlags::TRANSFER_WRITE,
+                dst_access_mask: vk::AccessFlags::SHADER_READ,
+                old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                image: texture_image,
+                subresource_range: vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    level_count: 1,
+                    layer_count: 1,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            device.cmd_pipeline_barrier(
+                texture_command_buffer,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[texture_barrier_end],
+            );
+        },
+    );
+
+    texture_image
+}
+
+unsafe fn load_image_dmabuf(
+    instance: &ash::Instance,
+    device: &ash::Device,
+    command_buffer: vk::CommandBuffer,
+    command_buffer_reuse_fence: vk::Fence,
+    queue: vk::Queue,
+) -> vk::Image {
+    let (mut image_extent, image_data) = image();
+    //let stride = u64::from(image_extent.width) * 4;
+    let stride = 576 * 4;
+    let udmabuf = create_udmabuf(image_extent, &image_data, stride);
+    // TODO write data to udmabuf
+
+    //let size = stride * u64::from(image_extent.width);
+    let size = stride * u64::from(image_extent.height);
+    let layouts = &[vk::SubresourceLayout {
+        offset: 0,
+        // size: u64::from(dmabuf.planes[0].stride) * u64::from(dmabuf.height),
+        size: 0,
+        //row_pitch: u64::from(dmabuf.planes[0].stride),
+        row_pitch: stride,
+        array_pitch: 0,
+        depth_pitch: 0,
+    }];
+    let mut memory_create_info = vk::ExternalMemoryImageCreateInfo::default()
+        .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+    let mut modifier_create_info = vk::ImageDrmFormatModifierExplicitCreateInfoEXT::default()
+        //.drm_format_modifier(dmabuf.modifier)
+        .drm_format_modifier(0) // XXX? linear?
+        .plane_layouts(layouts);
+    /*
+    let size = vk::Extent3D {
+        width: dmabuf.width,
+        height: dmabuf.height,
+        depth: 1,
+    };
+    */
+    // TODO vkGetPhysicalDeviceImageFormatProperties2 to test what is allowed
+    let image_create_info = vk::ImageCreateInfo::default()
+        .flags(vk::ImageCreateFlags::empty())
+        .image_type(vk::ImageType::TYPE_2D)
+        // TODO
+        //.format(vk::Format::R8G8B8A8_SRGB)
+        // .format(vk::Format::R8G8B8A8_UNORM)
+        //.format(vk::Format::B8G8R8A8_SRGB)
+        .format(vk::Format::R8G8B8A8_UNORM)
+        .extent(image_extent.into())
+        .mip_levels(1)
+        .array_layers(1)
+        // XXX?
+        .samples(vk::SampleCountFlags::TYPE_1)
+        // XXX?
+        //.tiling(vk::ImageTiling::LINEAR)
+        .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
+        .usage(vk::ImageUsageFlags::SAMPLED)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE)
+        .queue_family_indices(&[])
+        // .initial_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .push_next(&mut memory_create_info)
+        .push_next(&mut modifier_create_info);
+    // The handle type (VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT), format (VK_FORMAT_R8G8B8A8_UNORM), type (VK_IMAGE_TYPE_2D), tiling (VK_IMAGE_TILING_LINEAR), usage (VK_IMAGE_USAGE_SAMPLED_BIT), flags (VkImageCreateFlags(0)) is not supported combination of parameters
+
+    // XXX allocation_callbacks
+    let image = device.create_image(&image_create_info, None).unwrap();
+
+    let ext = ash::extensions::khr::ExternalMemoryFd::new(instance, device);
+    let mut props = vk::MemoryFdPropertiesKHR::default();
+    ext
+        .get_memory_fd_properties(
+            vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
+            udmabuf.as_raw_fd(),
+            &mut props,
+        )
+        .unwrap();
+    println!("{props:?}");
+
+    let mut memory_fd_info = vk::ImportMemoryFdInfoKHR::default()
+        .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT) // XXX duplicates?
+        //.fd(dmabuf.planes[0].fd.as_raw_fd());
+        .fd(udmabuf.into_raw_fd());
+    let allocate_info = vk::MemoryAllocateInfo::default()
+        //.allocation_size(0)
+        .allocation_size(stride * u64::from(image_extent.height))
+        //.memory_type_index(0)
+        //.memory_type_index(5)
+        .memory_type_index(10)
+        .push_next(&mut memory_fd_info);
+    let memory = device.allocate_memory(&allocate_info, None).unwrap(); // XXX NONE
+    device.bind_image_memory(image, memory, 0).unwrap();
+
+    record_submit_commandbuffer(
+        &device,
+        command_buffer,
+        command_buffer_reuse_fence,
+        queue,
+        &[],
+        &[],
+        &[],
+        |device, texture_command_buffer| {
+            // XXX stage?
+            let barrier = vk::ImageMemoryBarrier::default()
+                //.src_access_mask(vk::AccessFlags::TRANSFER_WRITE) // XXX
+                //.src_access_mask(vk::AccessFlags::HOST_WRITE)
+                //.dst_access_mask(vk::AccessFlags::MEMORY_READ)
+                .dst_access_mask(vk::AccessFlags::SHADER_READ)
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .src_queue_family_index(ash::vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(ash::vk::QUEUE_FAMILY_IGNORED)
+                .image(image)
+                .subresource_range(
+                    vk::ImageSubresourceRange::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .base_mip_level(0)
+                        .level_count(1)
+                        .base_array_layer(0)
+                        .layer_count(1),
+                );
+            device.cmd_pipeline_barrier(
+                texture_command_buffer,
+                //vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[barrier],
+            );
+        },
+    );
+
+    image
+}
+
+#[derive(Debug)]
+pub struct Plane {
+    pub fd: OwnedFd,
+    pub offset: u32,
+    pub stride: u32,
+}
+
+#[allow(missing_docs)]
+#[derive(Debug)]
+pub struct Dmabuf {
+    pub format: u32,
+    pub modifier: u64,
+    pub width: u32,
+    pub height: u32,
+    pub planes: Vec<Plane>,
 }
