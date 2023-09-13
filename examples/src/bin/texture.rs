@@ -698,7 +698,7 @@ fn create_udmabuf(extents: vk::Extent2D, data: &[u8], stride: u64) -> OwnedFd {
     const UDMABUF_FLAGS_CLOEXEC: u32 = 0x01;
 
     let page_size = rustix::param::page_size();
-    let mut size = data.len();
+    let mut size = extents.height as usize * stride as usize;
     while size % page_size != 0 {
         size += 1;
     }
@@ -714,10 +714,12 @@ fn create_udmabuf(extents: vk::Extent2D, data: &[u8], stride: u64) -> OwnedFd {
     )
     .unwrap();
     let stride_pad = stride - extents.width as u64 * 4;
+    //let stride_pad = vec![0; stride as usize - extents.width as usize * 4];
     for i in 0..extents.height {
         let start = (i * extents.width * 4) as usize;
         let slice = &data[start..start + extents.width as usize * 4];
         assert_eq!(rustix::io::write(&memfd, slice).unwrap(), slice.len());
+        //assert_eq!(rustix::io::write(&memfd, &stride_pad).unwrap(), stride_pad.len());
         rustix::fs::seek(&memfd, rustix::fs::SeekFrom::Current(stride_pad as _)).unwrap();
     }
     assert_eq!(rustix::io::write(&memfd, &data).unwrap(), data.len());
@@ -981,8 +983,8 @@ unsafe fn load_image_dmabuf(
         //.allocation_size(0)
         .allocation_size(stride * u64::from(image_extent.height))
         //.memory_type_index(0)
-        //.memory_type_index(5)
-        .memory_type_index(10)
+        .memory_type_index(5)
+        //.memory_type_index(1) // TODO determine memory type to use
         .push_next(&mut memory_fd_info);
     let memory = device.allocate_memory(&allocate_info, None).unwrap(); // XXX NONE
     device.bind_image_memory(image, memory, 0).unwrap();
